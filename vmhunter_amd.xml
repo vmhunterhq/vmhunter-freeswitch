@@ -1,0 +1,61 @@
+<!-- vmhunter_amd.xml: drop into conf/dialplan/default/ (or your dialer's context), then `reloadxml`.
+
+     Originate the customer leg TO this extension so the AMD runs the moment the callee answers:
+
+       originate {vid=12345,ignore_early_media=true,origination_caller_id_number=18005551212}sofia/gateway/carrier/15551234567 vmhunter_amd XML default
+
+     `vid` is the lead/call id vmhunter bills and records under. Any string is fine.
+-->
+<include>
+
+  <extension name="vmhunter_amd">
+    <condition field="destination_number" expression="^vmhunter_amd$">
+      <action application="lua" data="vmhunter_amd.lua"/>
+      <action application="log" data="INFO vmhunter AMDSTATUS=${AMDSTATUS} RAW=${AMDSTATUS_RAW} CAUSE=${AMDCAUSE}"/>
+      <!-- conditions are evaluated before actions run, so branch with a transfer;
+           vmhunter_route re-enters the dialplan with the AMD variables already set -->
+      <action application="transfer" data="vmhunter_route XML default"/>
+    </condition>
+  </extension>
+
+  <!-- Call screening (iPhone "record your name and reason", Google Call Screen,
+       Smart Call Blocker, ...): the server labels it AMDCAUSE=CALLGUARD_PHRASE:<phrase>
+       whatever AMDSTATUS it sends, so branching on the cause works in both server
+       modes. The screener is listening: play a short intro that says who is
+       calling and why, then hand the call to an agent as if a person answered.
+       Record the intro as 8 kHz mono WAV, e.g. sounds/vmhunter/callguard-intro.wav:
+         "Hi, this is Acme Health calling about your appointment."
+       Check TCPA / pre-recorded-message rules for your campaigns before enabling.
+       To keep dropping screened calls instead, delete this extension and transfer
+       to vmhunter_${AMDSTATUS} above. -->
+  <extension name="vmhunter_route">
+    <condition field="destination_number" expression="^vmhunter_route$"/>
+    <condition field="${AMDCAUSE}" expression="^CALLGUARD">
+      <action application="log" data="INFO vmhunter CALLGUARD ${AMDCAUSE}: playing intro, then agent"/>
+      <action application="playback" data="$${sounds_dir}/vmhunter/callguard-intro.wav"/>
+      <action application="set" data="AMDSTATUS=HUMAN"/>
+      <action application="transfer" data="vmhunter_HUMAN XML default"/>
+      <anti-action application="transfer" data="vmhunter_${AMDSTATUS} XML default"/>
+    </condition>
+  </extension>
+
+  <extension name="vmhunter_HUMAN">
+    <condition field="destination_number" expression="^vmhunter_HUMAN$">
+      <!-- hand the live person to your agents: a callcenter queue, a fifo, or a bridge -->
+      <action application="callcenter" data="sales@default"/>
+    </condition>
+  </extension>
+
+  <extension name="vmhunter_MACHINE">
+    <condition field="destination_number" expression="^vmhunter_MACHINE$">
+      <!-- optional: give disconnected numbers their own disposition so the dialer
+           does not recycle the lead. AMDCAUSE is already set at this point. -->
+      <condition field="${AMDCAUSE}" expression="^DISCONNECT">
+        <action application="set" data="dialer_disposition=DISCONNECT"/>
+        <anti-action application="set" data="dialer_disposition=MACHINE"/>
+      </condition>
+      <action application="hangup" data="NORMAL_CLEARING"/>
+    </condition>
+  </extension>
+
+</include>
