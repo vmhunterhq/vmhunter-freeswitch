@@ -60,7 +60,7 @@ Edit the `vmhunter_HUMAN` and `vmhunter_MACHINE` extensions to match your dialer
 | Variable | Default | Meaning |
 |---|---|---|
 | `vmhunter_api_key` | (required) | Your API key |
-| `vmhunter_ws_url` | `ws://app.vmhunter.com:2701` | Server |
+| `vmhunter_ws_url` | `wss://app.vmhunter.com/ws` | Server |
 | `vmhunter_module` | auto | `audio_fork` or `audio_stream` |
 | `vid` | channel UUID | Lead or call id |
 
@@ -71,8 +71,9 @@ Inside the script, `CALLGUARD_AS` (default `HUMAN`) and `FAILED_AS` (default `MA
 | Symptom | Cause |
 |---|---|
 | `AMDCAUSE=NOT_RUN` | The script exited before starting the fork: check that the module is loaded (`module_exists mod_audio_fork`) and the API key is set. |
-| Every call is `INITIALSILENCE` | The fork is sending the wrong leg or no audio. The config uses the "mono 8k" far-end stream; check which leg your originate answers on. |
-| Verdict never arrives | Outbound TCP to port 2701 is blocked, or the `mod_audio_fork::json` event is not reaching the script. |
+| Every call is `INITIALSILENCE` | The server received silence. Most often the script is an older copy whose wait loop blocked in `con:pop(1, ms)`: a media bug only receives audio while the session reads frames, so a blocking wait streams silence (fixed 2026-10-24 with `con:pop(0)` + `session:sleep()`). Otherwise the fork is on the wrong leg: the config uses the "mono 8k" far-end stream; check which leg your originate runs the script on. |
+| Verdict never arrives | Outbound TCP to port 443 (wss) or 2701 (ws) is blocked, or the module's `::json` event is not reaching the script. |
+| `AMDCAUSE=WS_ERROR` or `WS_CONNECT_FAILED` on every call | The module could not open the WebSocket. The script now logs the module's error text (`detail=...`) at ERR level; check TLS support in your module build and try `ws://app.vmhunter.com:2701` to separate TLS from everything else. |
 
 ## License
 

@@ -13,7 +13,7 @@
 --
 -- Channel variables read (set them in the originate string or in vars.xml):
 --   vid               lead / call id sent to vmhunter (billing + recording name). Falls back to the uuid.
---   vmhunter_ws_url   server URL           (default ws://app.vmhunter.com:2701)
+--   vmhunter_ws_url   server URL           (default wss://app.vmhunter.com/ws)
 --   vmhunter_api_key  your vmhunter API key (required)
 --   vmhunter_module   audio_fork | audio_stream  (optional; auto-detected when unset)
 --
@@ -22,7 +22,7 @@
 --   binary raw s16le mono 8 kHz PCM                                                    <- module "mono 8k"
 --   text  {"AMDSTATUS":"..","AMDCAUSE":".."} from the server, then the server closes  <- mod_<module>::json event
 
-local DEFAULT_WS_URL = "ws://app.vmhunter.com:2701"
+local DEFAULT_WS_URL = "wss://app.vmhunter.com/ws"  -- TLS; use ws://app.vmhunter.com:2701 if your module lacks TLS
 local WAIT_MS        = 6000      -- server budget: 2 s audio + up to 3 s SpeechLLM analysis
 local POLL_MS        = 100
 local CALLGUARD_AS   = "HUMAN"   -- HUMAN (default, connect to agent) | MACHINE (drop)
@@ -88,8 +88,16 @@ end
 local raw, cause = "FAILED", "NO_REPLY"
 local waited = 0
 while waited < WAIT_MS and session:ready() do
-  local e = con:pop(1, POLL_MS)
-  waited = waited + POLL_MS
+  -- Keep reading media while waiting. uuid_audio_fork / uuid_audio_stream take
+  -- audio from a media bug on the channel's read stream, and that bug only gets
+  -- frames while the session reads them. A blocking con:pop(1, ms) stops the
+  -- reads, so the server would receive 2 s of silence on every call
+  -- (INITIALSILENCE everywhere). Poll without blocking and sleep in the session.
+  local e = con:pop(0)
+  if not e then
+    session:sleep(POLL_MS)
+    waited = waited + POLL_MS
+  end
   if e and e:getHeader("Unique-ID") == uuid then
     local sub = e:getHeader("Event-Subclass") or ""
     if sub == EV .. "json" then
@@ -99,6 +107,9 @@ while waited < WAIT_MS and session:ready() do
       break
     elseif sub == EV .. "connect_failed" or sub == EV .. "error" then
       cause = "WS_" .. sub:match("::(.*)"):upper()
+      -- the module's error text (TLS, upgrade, DNS) is only in the event body
+      freeswitch.consoleLog("ERR", "[vmhunter] " .. sub .. " uuid=" .. uuid .. " url=" .. ws_url ..
+        " detail=" .. (e:getBody() or "") .. "\n")
       break
     elseif sub == EV .. "disconnect" then
       cause = "WS_DISCONNECT"   -- server closed without a verdict
